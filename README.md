@@ -12,7 +12,7 @@ so all data is reset every time the server restarts.
 | Name | Student ID | Role |
 |------|-----------|------|
 | Zhassulan Talipbay | 250107072 | Restaurants, menu items, storage |
-| Alibel Yestay | 250107048 | Customers, orders, order service |
+| Alibek Yesay | 250107048 | Customers, orders, order service |
 
 ## Technologies
 
