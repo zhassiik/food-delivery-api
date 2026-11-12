@@ -10,7 +10,7 @@ router = APIRouter(prefix="/customers", tags=["Customers"])
 
 
 def find_customer(customer_id):
-    """Return the customer or raise 404 if it does not exist."""
+    """Return the customer or raise ee404 if it does not exist."""
     customer = storage.customers.get(customer_id)
     if customer is None:
         raise HTTPException(status_code=404, detail=f"Customer with id {customer_id} not found")
