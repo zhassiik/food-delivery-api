@@ -1,3 +1,4 @@
+from datetime import datetime
 from enum import Enum
 from typing import List, Optional
 
@@ -47,7 +48,10 @@ class OrderStatusUpdate(BaseModel):
 class OrderItemResponse(BaseModel):
     """One line of an order, with the price saved at the moment of ordering."""
 
-    menu_item_id: int
+    model_config = ConfigDict(from_attributes=True)
+
+    # None if the menu item was deleted later (the name and price are still kept)
+    menu_item_id: Optional[int]
     name: str
     quantity: int
     unit_price: float
@@ -57,6 +61,8 @@ class OrderItemResponse(BaseModel):
 class OrderResponse(BaseModel):
     """Data the API returns for an order."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     customer_id: int
     restaurant_id: int
@@ -64,3 +70,4 @@ class OrderResponse(BaseModel):
     total_price: float
     delivery_address: str
     status: OrderStatus
+    created_at: datetime

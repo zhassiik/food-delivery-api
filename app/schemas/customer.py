@@ -26,6 +26,8 @@ class CustomerUpdate(BaseModel):
 class CustomerResponse(BaseModel):
     """Data the API returns for a customer."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     phone: str

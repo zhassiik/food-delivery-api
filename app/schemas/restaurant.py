@@ -29,6 +29,9 @@ class RestaurantUpdate(BaseModel):
 class RestaurantResponse(BaseModel):
     """Data the API returns for a restaurant."""
 
+    # Allows creating this schema directly from a SQLAlchemy model object
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     name: str
     cuisine_type: str

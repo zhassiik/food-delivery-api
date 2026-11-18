@@ -32,6 +32,8 @@ class MenuItemUpdate(BaseModel):
 class MenuItemResponse(BaseModel):
     """Data the API returns for a menu item."""
 
+    model_config = ConfigDict(from_attributes=True)
+
     id: int
     restaurant_id: int
     name: str

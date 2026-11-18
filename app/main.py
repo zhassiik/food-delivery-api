@@ -1,23 +1,20 @@
 from fastapi import FastAPI
 
-from app import storage
 from app.routers import customers, menu_items, orders, restaurants
 
 app = FastAPI(
     title="Food Delivery Service API",
     description="A simple university project: restaurants, menus, customers and orders. "
-                "All data is stored in memory.",
-    version="1.0.0",
+                "Data is stored in PostgreSQL using SQLAlchemy; the schema is managed by Alembic.",
+    version="2.0.0",
 )
 
-# Connect all routers to the application
+# Connect all routers to the application.
+# Tables are NOT created here: run "alembic upgrade head" once before starting the server.
 app.include_router(restaurants.router)
 app.include_router(menu_items.router)
 app.include_router(customers.router)
 app.include_router(orders.router)
-
-# Add a few sample records so Swagger testing is easier
-storage.load_sample_data()
 
 
 @app.get("/", tags=["Root"])

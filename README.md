@@ -1,80 +1,162 @@
 # Food Delivery Service API
 
-A simple REST API for a food delivery service, built with **FastAPI** and **Pydantic**.
+A REST API for a food delivery service, built with **FastAPI**, **PostgreSQL** and **SQLAlchemy**.
 Restaurants publish menus, customers place orders, and orders move through a
 delivery process (`pending → confirmed → preparing → delivering → delivered`).
 
-All data is stored **in memory** (Python dictionaries). There is no database,
-so all data is reset every time the server restarts.
+- **Assignment 5:** REST API with in-memory storage.
+- **Assignment 6 (this version):** the in-memory dictionaries are replaced by a **PostgreSQL** database.
+  Tables and relationships are defined with **SQLAlchemy** models, and the schema is created by **Alembic** migrations.
+  Data now stays saved after the server restarts.
 
 ## Team members
 
 | Name | Student ID | Role |
 |------|-----------|------|
-| Zhassulan Talipbay | 250107072 | Restaurants, menu items, storage |
-| Alibek Yesay | 250107048 | Customers, orders, order service |
+| Zhassulan Talipbay | 250107072 | Restaurants, menu items, database setup |
+| Alibek Yesay | 250107048 | Customers, orders, order service, migrations |
 
 ## Technologies
 
 - Python 3.9+
 - FastAPI: web framework and Swagger UI
 - Pydantic v2: request and response validation
+- PostgreSQL: database
+- SQLAlchemy 2.0: ORM (Python classes ↔ database tables)
+- Alembic: database migrations
+- psycopg2: PostgreSQL driver
+- python-dotenv: reads settings from the `.env` file
 - Uvicorn: development server
-- Git: version control
-
-## Workflows
-
-1. **Restaurant and menu management**: create, view, update and delete restaurants;
-   add, view, update and delete the menu items of a restaurant.
-2. **Customer order creation**: create customers and place orders. The server checks
-   the customer, the restaurant and every menu item, calculates the total price and
-   sets the status to `pending`.
-3. **Order status management and cancellation**: view and filter orders, move an order
-   to the next status, and cancel orders that are not yet being prepared.
 
 ## Project structure
 
 ```
 food-delivery-api/
 ├── app/
-│   ├── __init__.py
-│   ├── main.py              # creates the FastAPI app and connects routers
-│   ├── storage.py           # in-memory dictionaries, id counters, sample data
-│   ├── schemas/             # Pydantic models (Create / Update / Response)
-│   │   ├── __init__.py
+│   ├── main.py                 # creates the FastAPI app and connects routers
+│   ├── database.py             # engine, session, Base, get_db() dependency
+│   ├── seed.py                 # optional sample data (python -m app.seed)
+│   ├── models/                 # SQLAlchemy models = database tables
+│   │   ├── restaurant.py
+│   │   ├── menu_item.py
+│   │   ├── customer.py
+│   │   └── order.py            # Order and OrderItem
+│   ├── schemas/                # Pydantic models (Create / Update / Response)
 │   │   ├── restaurant.py
 │   │   ├── menu_item.py
 │   │   ├── customer.py
 │   │   └── order.py
-│   ├── routers/             # HTTP endpoints
-│   │   ├── __init__.py
+│   ├── routers/                # HTTP endpoints (only receive requests, call services)
 │   │   ├── restaurants.py
 │   │   ├── menu_items.py
 │   │   ├── customers.py
 │   │   └── orders.py
-│   └── services/
-│       ├── __init__.py
-│       └── order_service.py # order rules: validation, total price, status changes
+│   └── services/               # business logic + database operations
+│       ├── restaurant_service.py
+│       ├── menu_item_service.py
+│       ├── customer_service.py
+│       └── order_service.py
+├── alembic/
+│   ├── env.py                  # reads DATABASE_URL, uses our models
+│   └── versions/               # migration files
+├── alembic.ini
+├── .env.example                # example database settings
 ├── requirements.txt
-├── README.md
-└── .gitignore
+└── README.md
 ```
+
+**Layers:** `routers` (HTTP) → `schemas` (validation) → `services` (business rules) → `models` (database tables).
+
+## Database design
+
+```
+restaurants 1 ──< menu_items          (menu_items.restaurant_id)
+restaurants 1 ──< orders              (orders.restaurant_id)
+customers   1 ──< orders              (orders.customer_id)
+orders      1 ──< order_items         (order_items.order_id)
+menu_items  1 ──< order_items         (order_items.menu_item_id)
+```
+
+All five relationships are **one-to-many**.
+
+| Table | Columns | Constraints |
+|-------|---------|-------------|
+| `restaurants` | id, name, cuisine_type, address, is_open | PK id, all NOT NULL |
+| `menu_items` | id, restaurant_id, name, description, price `NUMERIC(10,2)`, is_available | FK → restaurants (ON DELETE CASCADE), `CHECK price > 0` |
+| `customers` | id, name, phone, address | `UNIQUE phone` |
+| `orders` | id, customer_id, restaurant_id, total_price `NUMERIC(10,2)`, delivery_address, status, created_at | FK → customers, FK → restaurants (ON DELETE RESTRICT), `CHECK status IN (...)`, `CHECK total_price >= 0` |
+| `order_items` | id, order_id, menu_item_id, name, quantity, unit_price, subtotal | FK → orders (ON DELETE CASCADE), FK → menu_items (ON DELETE SET NULL), `CHECK quantity >= 1`, `UNIQUE (order_id, menu_item_id)` |
+
+Design decisions:
+- **`NUMERIC(10,2)` for money:** stores prices exactly (a `float` can give 8.4999…).
+- **`order_items` stores name and price:** an old order does not change if the menu changes later.
+- **ON DELETE rules:**
+  - deleting a restaurant deletes its menu items (`CASCADE`);
+  - deleting an order deletes its items (`CASCADE`);
+  - a customer or restaurant that still has orders cannot be deleted (`RESTRICT`);
+  - deleting a menu item keeps old orders but sets their `menu_item_id` to `NULL` (`SET NULL`).
+- Rules are checked twice: first in the service (clear error message for the client), then by the database itself (protection against bad data).
 
 ## Setup and run
 
-```bash
-# 1. (optional) create a virtual environment
-python -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
+### 1. Install PostgreSQL
+- **macOS:** install [Postgres.app](https://postgresapp.com/) and click **Initialize**. User = your Mac username, no password, port 5432.
+- **Windows:** install PostgreSQL from [postgresql.org/download](https://www.postgresql.org/download/). User `postgres`, with the password you choose in the installer.
 
-# 2. install dependencies
-pip install -r requirements.txt
-
-# 3. start the server
-uvicorn app.main:app --reload
+### 2. Create the database
+In `psql` (or pgAdmin):
+```sql
+CREATE DATABASE food_delivery;
 ```
 
-Open **http://127.0.0.1:8000/docs** to see Swagger UI.
+### 3. Install Python packages
+```bash
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 4. Configure the connection
+```bash
+cp .env.example .env            # Windows: copy .env.example .env
+```
+Edit `.env`:
+```
+DATABASE_URL=postgresql+psycopg2://USER:PASSWORD@localhost:5432/food_delivery
+```
+Examples: `postgresql+psycopg2://postgres:mypassword@localhost:5432/food_delivery` (Windows),
+or `postgresql+psycopg2://yourmacname@localhost:5432/food_delivery` (Postgres.app, no password).
+The `.env` file is in `.gitignore`, so passwords are never pushed to GitHub.
+
+### 5. Create the tables with Alembic
+```bash
+alembic upgrade head
+```
+
+### 6. (Optional) Add sample data
+```bash
+python -m app.seed
+```
+
+### 7. Start the server
+```bash
+uvicorn app.main:app --reload
+```
+Open **http://127.0.0.1:8000/docs**.
+
+## Migrations (Alembic)
+
+| Command | What it does |
+|---------|--------------|
+| `alembic upgrade head` | Apply all migrations (create/update tables) |
+| `alembic downgrade base` | Undo all migrations (drop tables) |
+| `alembic current` | Show which migration the database is on |
+| `alembic history` | List all migrations |
+| `alembic revision --autogenerate -m "message"` | Create a new migration after changing a model |
+
+The migration file `alembic/versions/f99239699c96_create_tables.py` creates all five tables
+with their keys, constraints and indexes. Running `alembic downgrade base` and then `alembic upgrade head`
+recreates the whole schema from zero.
 
 ## Endpoint summary
 
@@ -84,7 +166,7 @@ Open **http://127.0.0.1:8000/docs** to see Swagger UI.
 | GET | `/restaurants` | List restaurants (`?cuisine_type=`, `?is_open=`) | 200 |
 | GET | `/restaurants/{restaurant_id}` | Get one restaurant | 200 |
 | PATCH | `/restaurants/{restaurant_id}` | Update a restaurant | 200 |
-| DELETE | `/restaurants/{restaurant_id}` | Delete a restaurant and its menu | 204 |
+| DELETE | `/restaurants/{restaurant_id}` | Delete a restaurant (and its menu) | 204 |
 | POST | `/restaurants/{restaurant_id}/menu-items` | Add a menu item to a restaurant | 201 |
 | GET | `/restaurants/{restaurant_id}/menu-items` | List a restaurant's menu (`?is_available=`) | 200 |
 | GET | `/menu-items/{menu_item_id}` | Get one menu item | 200 |
@@ -106,166 +188,61 @@ Open **http://127.0.0.1:8000/docs** to see Swagger UI.
 **Status codes**
 - `404 Not Found`: the resource does not exist.
 - `400 Bad Request`: invalid business operation (item from another restaurant, duplicate item in one order).
-- `409 Conflict`: the operation conflicts with the current state (closed restaurant, unavailable item, invalid status transition, deleting something used by an active order, duplicate phone number).
+- `409 Conflict`: conflicts with the current state (closed restaurant, unavailable item, invalid status transition, deleting something that still has orders, duplicate phone number).
 - `422 Unprocessable Entity`: Pydantic validation error (empty name, price ≤ 0, quantity < 1, unknown status, etc.).
 
 **Restaurants and menu items**
-- Name, cuisine type and address cannot be empty.
+- Name, cuisine type and address cannot be empty. Price must be greater than 0.
 - A menu item can only be added to an existing restaurant.
-- Price must be greater than 0.
-- A restaurant with active orders cannot be deleted. Deleting a restaurant also deletes its menu items.
+- A restaurant with orders cannot be deleted. Close it instead with `PATCH {"is_open": false}`. Deleting a restaurant without orders also deletes its menu items.
 - A menu item used in an active order cannot be deleted.
 
 **Customers**
-- Name, phone and address cannot be empty.
-- Two customers cannot have the same phone number (409).
-- A customer with active orders cannot be deleted.
+- Name, phone and address cannot be empty. The phone number must be unique.
+- A customer with orders cannot be deleted. Delete their finished orders first.
 
 **Orders**
 - The customer must exist. The restaurant must exist and be open.
-- An order must contain at least one item. Quantity must be at least 1.
+- At least one item. Quantity at least 1. The same item cannot appear twice.
 - Every menu item must exist, be available and belong to the order's restaurant.
-- The same menu item cannot appear twice in one order (increase the quantity instead).
-- `total_price` is calculated by the server (`price × quantity` for each item). The client cannot send it.
+- `total_price` is calculated by the server. The client cannot send it (422).
 - If `delivery_address` is not given, the customer's address is used.
-- A new order always starts with status `pending`.
-- The item name and price are saved inside the order, so later menu changes do not change old orders.
-- Only `delivered` or `cancelled` orders can be deleted. Active orders must be cancelled first.
-- Finished orders are kept as history even if their restaurant, menu item or customer is deleted later.
+- New orders start as `pending`. The order and its items are saved in **one transaction**.
+- Only `delivered` or `cancelled` orders can be deleted.
 
 **Allowed status transitions**
-
 ```
 pending    → confirmed | cancelled
 confirmed  → preparing | cancelled
 preparing  → delivering
 delivering → delivered
-delivered, cancelled → (final, no changes)
+delivered, cancelled → (final)
 ```
-
-Moving backward, skipping steps, or cancelling after `preparing` returns `409 Conflict`.
-
-"Active" orders are those with status `pending`, `confirmed`, `preparing` or `delivering`.
-
-## Sample data
-
-On startup the API already contains:
-
-| Type | id | Data |
-|------|----|------|
-| Restaurant | 1 | Pizza Palace (Italian, **open**) |
-| Restaurant | 2 | Sushi Corner (Japanese, **closed**) |
-| Menu item | 1 | Margherita Pizza, 8.50, restaurant 1 |
-| Menu item | 2 | Pepperoni Pizza, 10.00, restaurant 1 |
-| Menu item | 3 | Tiramisu, 4.50, restaurant 1, **not available** |
-| Menu item | 4 | California Roll, 7.00, restaurant 2 |
-| Customer | 1 | Alex Johnson, 100 Elm Street, Apt 4 |
-
-So new records get these ids: restaurant **3**, menu items **5, 6, 7**, customer **2**, order **1**.
 
 ## Swagger testing scenario
 
-Open http://127.0.0.1:8000/docs, click an endpoint → **Try it out** → fill in the body → **Execute**.
-Run the steps in this order right after starting the server (the ids below depend on it).
+Start with an empty database: `alembic upgrade head`, then `python -m app.seed`.
+The sample data contains restaurant 1 (Pizza Palace, open), restaurant 2 (Sushi Corner, closed),
+menu items 1–4 (item 3 is unavailable) and customer 1.
 
-### 1. Create a restaurant: `POST /restaurants` → **201**
-```json
-{ "name": "Burger House", "cuisine_type": "American", "address": "25 Oak Avenue", "is_open": true }
-```
-The response has `"id": 3`.
+| # | Request | Body | Expected |
+|---|---------|------|----------|
+| 1 | `POST /restaurants` | `{"name": "Burger House", "cuisine_type": "American", "address": "25 Oak Avenue", "is_open": true}` | 201, id 3 |
+| 2 | `POST /restaurants/3/menu-items` | `{"name": "Cheeseburger", "description": "Beef patty with cheddar", "price": 6.5}` | 201, id 5 |
+| 3 | `POST /restaurants/3/menu-items` | `{"name": "French Fries", "description": "Crispy fries", "price": 2.5}` | 201, id 6 |
+| 4 | `POST /restaurants/3/menu-items` | `{"name": "Milkshake", "description": "Vanilla", "price": 3.0}` | 201, id 7 |
+| 5 | `POST /restaurants/3/menu-items` | `{"name": "Free", "price": 0}` | 422 |
+| 6 | `POST /customers` | `{"name": "Maria Lopez", "phone": "+1-555-0199", "address": "7 River Street"}` | 201, id 2 |
+| 7 | `POST /orders` | `{"customer_id": 2, "restaurant_id": 3, "items": [{"menu_item_id": 5, "quantity": 2}, {"menu_item_id": 6, "quantity": 1}]}` | 201, `total_price` 15.5, `pending` |
+| 8 | `PATCH /orders/1/status` | `{"status": "confirmed"}`, then `preparing`, `delivering`, `delivered` | 200 each |
+| 9 | `PATCH /orders/1/status` | `{"status": "cancelled"}` | 409 |
+| 10 | `PATCH /menu-items/7` | `{"is_available": false}` | 200 |
+| 11 | `POST /orders` | `{"customer_id": 2, "restaurant_id": 3, "items": [{"menu_item_id": 7, "quantity": 1}]}` | 409, not available |
+| 12 | `GET /restaurants/999` | none | 404 |
+| 13 | `POST /orders` | `{"customer_id": 2, "restaurant_id": 3, "items": [{"menu_item_id": 6, "quantity": 3}]}` | 201, id 2 |
+| 14 | `PATCH /orders/2/status` | `{"status": "cancelled"}` | 200 |
+| 15 | `DELETE /restaurants/3` | none | 409, has order history |
+| 16 | `POST /orders` to closed restaurant 2 with item 4 | `{"customer_id": 1, "restaurant_id": 2, "items": [{"menu_item_id": 4, "quantity": 1}]}` | 409 |
 
-### 2. Add menu items: `POST /restaurants/3/menu-items` → **201** (three times)
-```json
-{ "name": "Cheeseburger", "description": "Beef patty with cheddar", "price": 6.5 }
-```
-```json
-{ "name": "French Fries", "description": "Crispy fries", "price": 2.5 }
-```
-```json
-{ "name": "Milkshake", "description": "Vanilla", "price": 3.0 }
-```
-They get ids 5, 6 and 7.
-Extra check: `"price": 0` returns **422**. `POST /restaurants/999/menu-items` returns **404**.
-
-### 3. Create a customer: `POST /customers` → **201**
-```json
-{ "name": "Maria Lopez", "phone": "+1-555-0199", "address": "7 River Street" }
-```
-The response has `"id": 2`.
-
-### 4. Create an order: `POST /orders` → **201**
-```json
-{
-  "customer_id": 2,
-  "restaurant_id": 3,
-  "items": [
-    { "menu_item_id": 5, "quantity": 2 },
-    { "menu_item_id": 6, "quantity": 1 }
-  ]
-}
-```
-
-### 5. Check the calculated total: `GET /orders/1` → **200**
-`total_price` is **15.5** (6.5 × 2 + 2.5 × 1), `status` is `"pending"`, and
-`delivery_address` is `"7 River Street"` (taken from the customer).
-
-### 6. Move the order through valid statuses: `PATCH /orders/1/status` → **200** each
-```json
-{ "status": "confirmed" }
-```
-```json
-{ "status": "preparing" }
-```
-```json
-{ "status": "delivering" }
-```
-```json
-{ "status": "delivered" }
-```
-
-### 7. Try an invalid status transition: `PATCH /orders/1/status` → **409**
-```json
-{ "status": "cancelled" }
-```
-Response: `"Order 1 is already 'delivered' and can no longer be changed"`.
-
-### 8. Try ordering an unavailable item
-First make the milkshake unavailable with `PATCH /menu-items/7` → **200**
-```json
-{ "is_available": false }
-```
-Then `POST /orders` → **409** (`"Menu item 'Milkshake' is currently not available"`)
-```json
-{ "customer_id": 2, "restaurant_id": 3, "items": [ { "menu_item_id": 7, "quantity": 1 } ] }
-```
-
-### 9. Try a nonexistent resource
-- `GET /restaurants/999` → **404**
-- `POST /orders` with an unknown customer → **404**
-```json
-{ "customer_id": 999, "restaurant_id": 3, "items": [ { "menu_item_id": 5, "quantity": 1 } ] }
-```
-
-### 10. Cancel an eligible order
-Create a new order with `POST /orders` → **201** (gets id 2, status `pending`)
-```json
-{ "customer_id": 2, "restaurant_id": 3, "items": [ { "menu_item_id": 6, "quantity": 3 } ], "delivery_address": "Office, 9 Hill Road" }
-```
-Cancel it with `PATCH /orders/2/status` → **200**
-```json
-{ "status": "cancelled" }
-```
-
-### More checks you can try
-
-| Request | Expected |
-|---------|----------|
-| `POST /orders` to closed restaurant 2 with item 4 | 409 |
-| `POST /orders` to restaurant 3 with item 1 (belongs to restaurant 1) | 400 |
-| `POST /orders` with `"items": []` | 422 |
-| `POST /orders` with `"quantity": 0` | 422 |
-| `POST /orders` with an extra `"total_price": 1` | 422 |
-| `PATCH /orders/{id}/status` from `pending` to `delivered` | 409 |
-| Create a new order for restaurant 3, then `DELETE /restaurants/3` while it is still `pending` | 409 |
-| `GET /orders?status=pending` | 200, only pending orders |
-| `GET /restaurants?is_open=true` | 200, only open restaurants |
+**Persistence check:** stop the server (Ctrl+C), start it again, and call `GET /orders`.
+The orders are still there, because they are stored in PostgreSQL.
