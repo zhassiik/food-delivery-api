@@ -20,3 +20,6 @@ app.include_router(orders.router)
 @app.get("/", tags=["Root"])
 def root():
     return {"message": "Food Delivery Service API is running. Open /docs to test it."}
+@app.get("/health",tags=["Health"]):
+def health():
+    return {"status:ok"}
